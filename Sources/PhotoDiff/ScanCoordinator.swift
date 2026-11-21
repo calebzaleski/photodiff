@@ -110,6 +110,9 @@ final class ScanCoordinator {
     }
     var missingPhotoCount: Int { items.count - missingVideoCount }
 
+    /// Photos recovered at their real size, rather than as a small cached preview.
+    var fullQualityCount: Int { items.filter { $0.picture?.isFullQuality == true }.count }
+
     var visibleItems: [Item] {
         let on = Set(libraries.filter(\.included).map(\.id))
         guard on.count != libraries.count else { return items }

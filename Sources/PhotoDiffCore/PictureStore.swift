@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 /// Where the app keeps the pictures it recovered, so a library copy can be deleted and
 /// the grid — and the export — still work.
@@ -23,6 +24,17 @@ public final class PictureStore: @unchecked Sendable {
         public let kind: String
         public let fileName: String
         public let bytes: Int64
+        /// Actual pixel size of what was recovered — not what the photo used to be.
+        /// Shown in the grid, because "thumbnail" alone does not convey that a 4032px
+        /// photo came back as 120px.
+        public var pixelWidth: Int = 0
+        public var pixelHeight: Int = 0
+
+        public var isFullQuality: Bool { kind == "original" }
+
+        public var sizeLabel: String {
+            pixelWidth > 0 ? "\(pixelWidth)×\(pixelHeight)" : "unknown size"
+        }
     }
 
     public let root: URL
@@ -59,10 +71,22 @@ public final class PictureStore: @unchecked Sendable {
             at: target.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         try data.write(to: target, options: .atomic)
+        let (w, h) = Self.pixelSize(of: data)
         return Stored(
             assetID: assetID, kind: kind,
-            fileName: target.lastPathComponent, bytes: Int64(data.count)
+            fileName: target.lastPathComponent, bytes: Int64(data.count),
+            pixelWidth: w, pixelHeight: h
         )
+    }
+
+    /// Reads just the image header, not the pixels.
+    static func pixelSize(of data: Data) -> (Int, Int) {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil)
+                as? [CFString: Any] else { return (0, 0) }
+        let w = (props[kCGImagePropertyPixelWidth] as? Int) ?? 0
+        let h = (props[kCGImagePropertyPixelHeight] as? Int) ?? 0
+        return (w, h)
     }
 
     public func url(for stored: Stored) -> URL {

@@ -74,8 +74,37 @@ public final class PictureExtractor {
     /// of pictures and a grid of filenames.
     public func extractPicture(for asset: AssetRecord, maxBytes: Int = 64 << 20) -> ExtractedPicture? {
         if let original = readOriginal(asset, limit: maxBytes) { return original }
+        if let scoped = readScopedOriginal(asset, limit: maxBytes) { return scoped }
         if let derivative = readLargestDerivative(asset, limit: maxBytes) { return derivative }
         if let packedThumb = readPackedThumbnail(asset) { return packedThumb }
+        return nil
+    }
+
+    /// Full-size files that live under `scopes/` rather than `originals/`.
+    ///
+    /// Photos files arriving through a shared album or through Messages are stored in
+    /// a separate scope, and they are full-size originals — not previews. In one real
+    /// library this found 1,462 photographs that `originals/` did not have, roughly
+    /// tripling how many could be recovered at full quality. Easy to miss, because
+    /// `scopes/` mostly holds other people's shared photos that are not assets in this
+    /// library at all; only those whose UUID matches an asset count.
+    private func readScopedOriginal(_ asset: AssetRecord, limit: Int) -> ExtractedPicture? {
+        guard let shard = asset.uuid.first else { return nil }
+        for scope in library.contents(of: "scopes") {
+            let dir = "scopes/\(scope)/originals/\(shard)"
+            let best = library.contents(of: dir)
+                .filter { ($0 as NSString).deletingPathExtension == asset.uuid }
+                .map { (path: "\(dir)/\($0)", size: library.size(of: "\(dir)/\($0)") ?? 0) }
+                .max { $0.size < $1.size }
+
+            guard let best, best.size > 0,
+                  let data = try? library.readAll(best.path, limit: limit),
+                  !data.isEmpty else { continue }
+            return ExtractedPicture(
+                data: data, kind: .original,
+                fileExtension: (best.path as NSString).pathExtension.lowercased()
+            )
+        }
         return nil
     }
 
@@ -110,6 +139,7 @@ public final class PictureExtractor {
     /// cache needs to be decoded at all.
     public func pictureAvailability(for asset: AssetRecord) -> PictureKind? {
         if originalPath(asset) != nil { return .original }
+        if readScopedOriginalPath(asset) != nil { return .original }
         if !derivativeNames(asset).isEmpty { return .derivative }
         if asset.placement.thumbnailIndex != nil && thumbnailCacheIsAvailable { return .thumbnail }
         return nil
@@ -145,6 +175,19 @@ public final class PictureExtractor {
             "originals/\(shard)/\(asset.uuid).\(ext.uppercased())",
         ]
         return candidates.first { library.exists($0) }
+    }
+
+    private func readScopedOriginalPath(_ asset: AssetRecord) -> String? {
+        guard let shard = asset.uuid.first else { return nil }
+        for scope in library.contents(of: "scopes") {
+            let dir = "scopes/\(scope)/originals/\(shard)"
+            if let hit = library.contents(of: dir).first(
+                where: { ($0 as NSString).deletingPathExtension == asset.uuid }
+            ) {
+                return "\(dir)/\(hit)"
+            }
+        }
+        return nil
     }
 
     private func readOriginal(_ asset: AssetRecord, limit: Int) -> ExtractedPicture? {

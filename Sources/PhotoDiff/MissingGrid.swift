@@ -7,7 +7,14 @@ struct MissingGrid: View {
     let onOpen: (ScanCoordinator.Item) -> Void
 
     @State private var sort: Sort = .date
-    @State private var onlyWithPictures = false
+    @State private var quality: Quality = .all
+
+    enum Quality: String, CaseIterable, Identifiable {
+        case all = "All"
+        case withPicture = "Has a picture"
+        case fullQuality = "Full quality only"
+        var id: String { rawValue }
+    }
 
     enum Sort: String, CaseIterable, Identifiable {
         case date = "Date taken"
@@ -17,7 +24,11 @@ struct MissingGrid: View {
 
     private var shown: [ScanCoordinator.Item] {
         var list = coordinator.visibleItems
-        if onlyWithPictures { list = list.filter { $0.picture != nil } }
+        switch quality {
+        case .all: break
+        case .withPicture: list = list.filter { $0.picture != nil }
+        case .fullQuality: list = list.filter { $0.picture?.isFullQuality == true }
+        }
         switch sort {
         case .date:
             return list.sorted {
@@ -73,11 +84,16 @@ struct MissingGrid: View {
                 .font(.headline)
                 .monospacedDigit()
 
-            if coordinator.withoutPictureCount > 0 {
-                Toggle("Only ones with a picture", isOn: $onlyWithPictures)
-                    .toggleStyle(.checkbox)
-                    .font(.callout)
+            Picker("Show", selection: $quality) {
+                ForEach(Quality.allCases) { Text($0.rawValue).tag($0) }
             }
+            .pickerStyle(.menu)
+            .frame(width: 170)
+
+            Text("\(coordinator.fullQualityCount) at full quality")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
 
             Spacer()
 
@@ -159,8 +175,15 @@ private struct PhotoCell: View {
                     text: item.photo.representative.libraryName,
                     tone: .neutral
                 )
-                if let kind = item.picture?.kind {
-                    Badge(text: kind, tone: kind == "original" ? .good : .soft)
+                if let picture = item.picture {
+                    // Say the actual pixel size. "thumbnail" alone does not convey
+                    // that a 4032-pixel photo came back 120 pixels wide.
+                    Badge(
+                        text: picture.isFullQuality
+                            ? "full \(picture.sizeLabel)"
+                            : "\(picture.sizeLabel) only",
+                        tone: picture.isFullQuality ? .good : .warn
+                    )
                 } else {
                     Badge(text: "no picture", tone: .warn)
                 }
@@ -305,7 +328,20 @@ struct PhotoDetail: View {
                     Text(item.photo.libraryNames.joined(separator: ", "))
                 }
                 LabeledContent("Recovered as") {
-                    Text(item.picture?.kind ?? "nothing recoverable")
+                    if let p = item.picture {
+                        Text(p.isFullQuality
+                             ? "the full original, \(p.sizeLabel)"
+                             : "a cached \(p.kind) only, \(p.sizeLabel)")
+                    } else {
+                        Text("nothing recoverable")
+                    }
+                }
+                if let p = item.picture, !p.isFullQuality {
+                    Text("""
+                        The full-size photo is not in this library. It was removed when                         the library was optimised for iCloud storage, so this cached                         copy is the only one left here — exporting cannot produce more                         detail than you see above.
+                        """)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if a.fingerprint != nil {
                     LabeledContent("Fingerprint") { Text("recorded") }
