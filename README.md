@@ -99,14 +99,60 @@ The read-only suite builds a synthetic library fixture, takes a byte-level finge
 runs a full scan, and asserts the fixture is unchanged — then tampers with it to prove
 the tripwire actually fires. No real photo library is used in any test.
 
+## Where the pictures come from
+
+A library that ran with iCloud "Optimize Mac Storage" barely contains any photos. One
+real library of 13,087 held 530 full originals and about 1,000 cached previews. The
+other ~11,500 existed locally only as an entry in Photos' packed thumbnail cache. If
+those photos are gone from iCloud too, that cache is the last copy anywhere.
+
+So PhotoDiff tries three sources per photo, best first:
+
+1. the full original, if it was downloaded
+2. the largest cached preview JPEG
+3. the packed thumbnail cache — up to 120 × 120
+
+Anything it still can't find shows as a metadata tile, and the export filename always
+says which version you got.
+
+### The packed thumbnail format
+
+`resources/derivatives/thumbs/*.ithmb` is undocumented. It was worked out by reading a
+real library and checked against that library's own database — the UUIDs stored in the
+records match the assets with `ZTHUMBNAILINDEX` 0 through 6, in order.
+
+```
+record for thumbnail index k, at k * stride:
+  0    ..< P       pixel data, BC7, zero-padded
+  P    ..< P+16    asset UUID
+  P+16 ..< P+20    width,  uint32 LE
+  P+20 ..< P+24    height, uint32 LE
+  stride = P + 28
+```
+
+Pixels are BC7 (BPTC): 4×4 blocks of 16 bytes, so a 30×64 thumbnail is 8×16 blocks =
+2,048 bytes. A library keeps several of these files at different resolutions; the
+file name is Photos' format id and says nothing about size, so the stride is recovered
+from the file length — the pixel area is always a square BC7 grid, so stride must be
+`(blocks² × 16) + 28` and the length must divide by it exactly.
+
+Each record carries its own photo's UUID, which is checked before the image is used. A
+wrong offset therefore yields nothing rather than someone else's photo.
+
+Two wrong turns, recorded so nobody repeats them:
+
+- **It looks like ASTC and isn't.** Same block size, same byte-per-pixel ratio. The
+  giveaway is magenta — that's what the GPU renders for invalid ASTC blocks.
+- **A Metal blit from a compressed texture to an RGBA one is not a decode.** It
+  reinterprets the bytes and fails quietly, so every candidate format yields the same
+  plausible-looking rubbish. The texture has to be sampled in a shader.
+
 ## Known limits
 
-- **The packed thumbnail cache isn't read yet.** Photos keeps small thumbnails for
-  nearly every asset in `resources/derivatives/thumbs/*.ithmb`, including photos whose
-  originals were never downloaded. The layout has to be confirmed against a real
-  library before it can be decoded without producing garbled images, so for now photos
-  with no original and no derivative JPEG appear as a metadata tile instead of a
-  picture. The sidebar reports how many that is.
+- Recovered thumbnails are at most 120 pixels on the long side. Enough to recognise a
+  photo and decide about it; not enough to print one.
 - Shared-album photos are excluded by default, since PhotoKit's view of your current
   library excludes them too and counting them would flood the result.
 - Albums, keywords, faces and edits aren't compared. Identity and pixels only.
+- The app refuses to run under limited Photos access, because it would report
+  everything outside the selection as missing.
