@@ -117,6 +117,7 @@ let stamp: DateFormatter = {
 }()
 
 var written = 0, skippedThumbnailOnly = 0, failed = 0, skippedVideo = 0
+var alreadyThere = 0
 var bytes: Int64 = 0
 var usedNames = Set<String>()
 
@@ -159,9 +160,19 @@ for (n, photo) in unique.enumerated() {
         written += 1; bytes += chosen.bytes
         continue
     }
+
+    // Resumable: a file already there at the right size is left alone. 60GB of
+    // copying should not have to start over because something interrupted it.
+    let target = options.destination.appendingPathComponent(name)
+    if let existing = try? FileManager.default.attributesOfItem(atPath: target.path),
+       (existing[.size] as? NSNumber)?.int64Value == chosen.bytes {
+        chosen.source.close()
+        alreadyThere += 1
+        continue
+    }
+
     do {
-        bytes += try StreamCopier.copy(
-            chosen.source, to: options.destination.appendingPathComponent(name))
+        bytes += try StreamCopier.copy(chosen.source, to: target)
         written += 1
     } catch {
         failed += 1
@@ -173,6 +184,7 @@ func gb(_ b: Int64) -> String { String(format: "%.1f GB", Double(b) / 1e9) }
 print("""
 
     \(options.dryRun ? "Would write" : "Wrote") \(written) files, \(gb(bytes))
+      already present, left alone      : \(alreadyThere)
       thumbnail only, nothing to write : \(skippedThumbnailOnly)
       videos skipped                   : \(skippedVideo)
       failed                           : \(failed)
