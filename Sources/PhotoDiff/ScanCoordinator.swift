@@ -14,6 +14,7 @@ final class ScanCoordinator {
         case idle
         case needsPermission
         case permissionDenied
+        case permissionLimited
         case indexingCurrentLibrary(done: Int, total: Int)
         case readingLibraries(done: Int, total: Int)
         case comparing
@@ -35,6 +36,8 @@ final class ScanCoordinator {
             case .idle: return "Ready"
             case .needsPermission: return "Needs permission to read your photos"
             case .permissionDenied: return "Permission denied"
+            case .permissionLimited:
+                return "Only some photos are visible, so the comparison would be wrong"
             case .indexingCurrentLibrary(let d, let t):
                 return "Reading your current library — \(d) of \(t)"
             case .readingLibraries(let d, let t):
@@ -124,21 +127,18 @@ final class ScanCoordinator {
 
     // MARK: Permission
 
-    func checkAccess() {
-        switch CurrentLibraryIndex.currentAccess() {
+    private func apply(_ access: CurrentLibraryIndex.Access) {
+        switch access {
         case .granted: phase = .idle
+        case .limitedToSomePhotos: phase = .permissionLimited
         case .denied: phase = .permissionDenied
         case .notAsked: phase = .needsPermission
         }
     }
 
-    func requestAccess() async {
-        switch await CurrentLibraryIndex.requestAccess() {
-        case .granted: phase = .idle
-        case .denied: phase = .permissionDenied
-        case .notAsked: phase = .needsPermission
-        }
-    }
+    func checkAccess() { apply(CurrentLibraryIndex.currentAccess()) }
+
+    func requestAccess() async { apply(await CurrentLibraryIndex.requestAccess()) }
 
     // MARK: The scan
 
@@ -156,8 +156,11 @@ final class ScanCoordinator {
             phase = .failed("No Photos libraries in that folder.")
             return
         }
-        guard CurrentLibraryIndex.currentAccess() == .granted else {
-            phase = .needsPermission
+        let access = CurrentLibraryIndex.currentAccess()
+        guard access == .granted else {
+            // Scanning under limited access would mark thousands of photos as
+            // missing that are sitting in the library already. Refuse instead.
+            apply(access)
             return
         }
 

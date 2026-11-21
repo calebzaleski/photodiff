@@ -15,8 +15,12 @@ import PhotoDiffCore
 @MainActor
 final class CurrentLibraryIndex {
 
-    enum Access {
+    enum Access: Equatable {
         case granted
+        /// macOS granted access to a hand-picked subset of photos, not the whole
+        /// library. Every photo outside that subset would look "missing", so a
+        /// comparison run in this state is worse than useless — it is misleading.
+        case limitedToSomePhotos
         case denied
         case notAsked
     }
@@ -35,23 +39,22 @@ final class CurrentLibraryIndex {
 
     // MARK: Permission
 
-    static func currentAccess() -> Access {
-        switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
-        case .authorized, .limited: return .granted
+    private static func translate(_ status: PHAuthorizationStatus) -> Access {
+        switch status {
+        case .authorized: return .granted
+        case .limited: return .limitedToSomePhotos
         case .denied, .restricted: return .denied
         case .notDetermined: return .notAsked
         @unknown default: return .notAsked
         }
     }
 
+    static func currentAccess() -> Access {
+        translate(PHPhotoLibrary.authorizationStatus(for: .readWrite))
+    }
+
     static func requestAccess() async -> Access {
-        let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-        switch status {
-        case .authorized, .limited: return .granted
-        case .denied, .restricted: return .denied
-        case .notDetermined: return .notAsked
-        @unknown default: return .notAsked
-        }
+        translate(await PHPhotoLibrary.requestAuthorization(for: .readWrite))
     }
 
     // MARK: Phase one — the fast index

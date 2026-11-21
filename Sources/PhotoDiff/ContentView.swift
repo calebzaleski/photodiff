@@ -31,6 +31,16 @@ struct ContentView: View {
             PermissionGate(coordinator: coordinator, denied: false)
         case .permissionDenied:
             PermissionGate(coordinator: coordinator, denied: true)
+        case .permissionLimited:
+            Notice(
+                icon: "exclamationmark.triangle",
+                title: "PhotoDiff can only see some of your photos",
+                detail: """
+                    macOS gave this app a hand-picked selection rather than your whole                     library. Every photo outside that selection would be reported as                     missing, which would be badly wrong, so the scan has stopped.
+
+                    Open System Settings › Privacy & Security › Photos, find PhotoDiff,                     and change it to Full Access. Then scan again.
+                    """
+            )
         case .idle where coordinator.items.isEmpty:
             EmptyState(coordinator: coordinator)
         case .failed(let why):
