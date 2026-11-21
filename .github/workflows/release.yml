@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # bundle.sh reads the tag for the version string
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Build app bundle
+        run: ./bundle.sh release
+
+      - name: Zip
+        run: ditto -c -k --keepParent build/PhotoDiff.app build/PhotoDiff.app.zip
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/PhotoDiff.app.zip
+          body: |
+            Ad-hoc signed, not notarized. On first launch, right-click the app and
+            choose Open rather than double-clicking.
+
+            Libraries are only ever read. See the README for how that is enforced.

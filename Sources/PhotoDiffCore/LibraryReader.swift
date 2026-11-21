@@ -35,6 +35,10 @@ public final class LibraryReader {
     private let library: ReadOnlyLibrary
     private let temp: TempStore
 
+    /// The same read-only handle, reachable from this file's extensions. Still never
+    /// handed outside the module, and still the only route to a library's bytes.
+    var libraryHandle: ReadOnlyLibrary { library }
+
     public init(bundleURL: URL) throws {
         self.library = try ReadOnlyLibrary(bundleURL: bundleURL)
         self.temp = try TempStore(label: "db")
