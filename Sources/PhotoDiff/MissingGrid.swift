@@ -334,10 +334,11 @@ struct PhotoDetail: View {
         .frame(width: 640, height: 680)
         .task {
             guard let stored = item.picture else { return }
-            let store = coordinator.pictureStore
-            image = await Task.detached {
-                store.data(for: stored).flatMap { NSImage(data: $0) }
-            }.value
+            let url = coordinator.pictureStore.url(for: stored)
+            // Read off the main thread, but build the NSImage here: NSImage is not
+            // Sendable and must not cross a task boundary.
+            let bytes = await Task.detached { ThumbnailCache.fullSizeData(from: url) }.value
+            image = bytes.flatMap { NSImage(data: $0) }
         }
     }
 }

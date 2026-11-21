@@ -1,8 +1,15 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import PhotoDiffCore
 
 /// Decodes grid thumbnails on demand and keeps a bounded number in memory, so a result
 /// of several thousand photos scrolls immediately instead of decoding everything first.
+///
+/// The work off the main thread deliberately returns `Data`, not an `NSImage`. `NSImage`
+/// is not `Sendable` — it is an AppKit object with its own internal caching — so sending
+/// one between tasks is a data race that the compiler is right to reject. Re-encoding a
+/// small thumbnail costs very little next to reading and decoding the full picture.
 @MainActor
 final class ThumbnailCache {
 
@@ -15,11 +22,6 @@ final class ThumbnailCache {
 
     func cached(_ id: String) -> NSImage? { images[id] }
 
-    /// Decodes off the main thread, at roughly the size the grid draws, and caches the
-    /// small result rather than the full-size picture.
-    ///
-    /// The file read happens inside the detached task too. Reading a multi-megabyte
-    /// original on the main thread would stutter the grid while scrolling.
     func load(
         id: String,
         store: PictureStore,
@@ -31,13 +33,16 @@ final class ThumbnailCache {
         inFlight.insert(id)
         defer { inFlight.remove(id) }
 
-        let image: NSImage? = await Task.detached(priority: .userInitiated) {
-            guard let bytes = store.data(for: stored),
-                  let source = NSImage(data: bytes) else { return nil }
-            return ThumbnailCache.downscale(source, to: side)
+        let url = store.url(for: stored)
+        let pixels = Int(side * 2)   // enough for a Retina cell
+
+        // Both the file read and the decode happen here, off the main thread.
+        let jpeg: Data? = await Task.detached(priority: .userInitiated) {
+            ThumbnailCache.makeThumbnailData(from: url, maxPixel: pixels)
         }.value
 
-        if let image { remember(id: id, image: image) }
+        guard let jpeg, let image = NSImage(data: jpeg) else { return nil }
+        remember(id: id, image: image)
         return image
     }
 
@@ -50,17 +55,35 @@ final class ThumbnailCache {
         }
     }
 
-    private nonisolated static func downscale(_ image: NSImage, to side: CGFloat) -> NSImage {
-        let size = image.size
-        guard size.width > 0, size.height > 0 else { return image }
-        let scale = min(1, side / max(size.width, size.height))
-        guard scale < 1 else { return image }
+    /// Uses ImageIO's thumbnail path, which decodes only as much of the file as the
+    /// requested size needs — far cheaper than decoding a 48-megapixel original in
+    /// full and then shrinking it.
+    nonisolated static func makeThumbnailData(from url: URL, maxPixel: Int) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
 
-        let target = NSSize(width: size.width * scale, height: size.height * scale)
-        let output = NSImage(size: target)
-        output.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: target))
-        output.unlockFocus()
-        return output
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,   // honour EXIF rotation
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let thumb = CGImageSourceCreateThumbnailAtIndex(
+            source, 0, options as CFDictionary
+        ) else { return nil }
+
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            out, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(
+            dest, thumb, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return out as Data
+    }
+
+    /// Full-size bytes for the detail view, read off the main thread. Returns `Data`,
+    /// for the same reason as above.
+    nonisolated static func fullSizeData(from url: URL) -> Data? {
+        try? Data(contentsOf: url)
     }
 }
