@@ -58,6 +58,8 @@ final class ScanCoordinator {
         var assetCount: Int = 0
         var trashedCount: Int = 0
         var sharedCount: Int = 0
+        var photoCount: Int = 0
+        var videoCount: Int = 0
         var missingCount: Int = 0
         var readSeconds: TimeInterval = 0
         var error: String?
@@ -93,11 +95,18 @@ final class ScanCoordinator {
     var selection: Set<String> = []
     var summary: DiffSummary?
     var currentLibraryCount = 0
+    var currentPhotoCount = 0
+    var currentVideoCount = 0
     var timings: [String: TimeInterval] = [:]
     var pictureStoreBytes: Int64 = 0
 
     /// Photos with no recoverable picture, shown as metadata tiles.
     var withoutPictureCount: Int { items.filter { $0.picture == nil }.count }
+
+    var missingVideoCount: Int {
+        items.filter { $0.photo.representative.kind == .video }.count
+    }
+    var missingPhotoCount: Int { items.count - missingVideoCount }
 
     var visibleItems: [Item] {
         let on = Set(libraries.filter(\.included).map(\.id))
@@ -180,6 +189,8 @@ final class ScanCoordinator {
         }
         var index = built.index
         currentLibraryCount = built.assetCount
+        currentPhotoCount = built.photoCount
+        currentVideoCount = built.videoCount
         timings["Current library"] = built.buildTime
 
         // 2. Every old library, concurrently.
@@ -237,6 +248,8 @@ final class ScanCoordinator {
                     assetCount: outcome.assets.count,
                     trashedCount: outcome.trashedCount,
                     sharedCount: outcome.sharedCount,
+                    photoCount: outcome.photoCount,
+                    videoCount: outcome.videoCount,
                     readSeconds: outcome.duration,
                     hasPackedThumbnails: packed[outcome.libraryIdentity] ?? false
                 )

@@ -17,6 +17,8 @@ public final class LibraryReader {
         public let libraryName: String
         public let schema: String
         public let assets: [AssetRecord]
+        public var photoCount: Int { assets.filter { $0.kind == .photo }.count }
+        public var videoCount: Int { assets.filter { $0.kind == .video }.count }
         /// Assets skipped because they were in the trash.
         public let trashedCount: Int
         /// How we decided an asset came from a shared album, and how many did. Recorded

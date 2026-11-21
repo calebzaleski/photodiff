@@ -28,6 +28,8 @@ final class CurrentLibraryIndex {
     struct Built {
         var index: MatchIndex
         var assetCount: Int
+        var photoCount: Int
+        var videoCount: Int
         var withoutDate: Int
         var buildTime: TimeInterval
     }
@@ -74,12 +76,16 @@ final class CurrentLibraryIndex {
         var all: [PHAsset] = []
         var buckets: [Int64: [PHAsset]] = [:]
         var withoutDate = 0
+        var photos = 0
+        var videos = 0
         let total = fetched.count
 
         fetched.enumerateObjects { asset, offset, _ in
             all.append(asset)
 
-            let duration = asset.mediaType == .video ? asset.duration : nil
+            let isVideo = asset.mediaType == .video
+            if isVideo { videos += 1 } else { photos += 1 }
+            let duration = isVideo ? asset.duration : nil
             index.insert(
                 captureDate: asset.creationDate,
                 width: asset.pixelWidth,
@@ -106,6 +112,8 @@ final class CurrentLibraryIndex {
         return Built(
             index: index,
             assetCount: all.count,
+            photoCount: photos,
+            videoCount: videos,
             withoutDate: withoutDate,
             buildTime: Date().timeIntervalSince(started)
         )

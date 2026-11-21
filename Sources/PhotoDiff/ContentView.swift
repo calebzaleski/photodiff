@@ -125,10 +125,15 @@ private struct LibrarySidebar: View {
             if coordinator.currentLibraryCount > 0 {
                 Section("Your current library") {
                     LabeledContent("Photos") {
-                        Text("\(coordinator.currentLibraryCount)")
-                            .monospacedDigit()
+                        Text("\(coordinator.currentPhotoCount)").monospacedDigit()
                     }
-                    Text("Read through Apple's Photos API. Never modified.")
+                    LabeledContent("Videos") {
+                        Text("\(coordinator.currentVideoCount)").monospacedDigit()
+                    }
+                    LabeledContent("Total") {
+                        Text("\(coordinator.currentLibraryCount)").monospacedDigit().bold()
+                    }
+                    Text("Compare these with what Photos shows at the bottom of its Library view.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -145,7 +150,10 @@ private struct LibrarySidebar: View {
             if let summary = coordinator.summary {
                 Section("Result") {
                     LabeledContent("Missing photos") {
-                        Text("\(summary.missingCount)").monospacedDigit().bold()
+                        Text("\(coordinator.missingPhotoCount)").monospacedDigit().bold()
+                    }
+                    LabeledContent("Missing videos") {
+                        Text("\(coordinator.missingVideoCount)").monospacedDigit().bold()
                     }
                     LabeledContent("Already in yours") {
                         Text("\(summary.presentCount)").monospacedDigit()
@@ -252,7 +260,7 @@ private struct LibraryRow: View {
     }
 
     private var detailLine: String {
-        var parts = ["\(library.assetCount) photos"]
+        var parts = ["\(library.photoCount) photos", "\(library.videoCount) videos"]
         if library.trashedCount > 0 { parts.append("\(library.trashedCount) in trash") }
         if library.sharedCount > 0 { parts.append("\(library.sharedCount) shared") }
         parts.append(library.schema == "ZASSET" ? "newer format" : "older format")
