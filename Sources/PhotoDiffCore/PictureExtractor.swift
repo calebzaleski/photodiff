@@ -89,15 +89,16 @@ public final class PictureExtractor {
               let index = asset.placement.thumbnailIndex, index >= 0 else { return nil }
 
         let dir = "resources/derivatives/thumbs"
+        // packed.files is ordered largest-thumbnail first.
         for file in packed.files where index < file.recordCount {
-            let offset = PackedThumbnails.offset(forIndex: index)
             guard let bytes = try? library.read(
                 "\(dir)/\(file.fileName)",
-                at: offset,
-                length: PackedThumbnails.recordStride
+                at: file.offset(forIndex: index),
+                length: file.stride
             ) else { continue }
 
-            guard let record = PackedThumbnails.parse(record: bytes, expecting: asset.uuid),
+            guard let record = PackedThumbnails.parse(
+                      record: bytes, in: file, expecting: asset.uuid),
                   let jpeg = decoder.jpeg(from: record) else { continue }
             return ExtractedPicture(data: jpeg, kind: .thumbnail, fileExtension: "jpg")
         }
