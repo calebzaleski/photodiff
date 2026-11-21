@@ -38,9 +38,25 @@ public struct ExtractedPicture: Sendable {
 public final class PictureExtractor {
 
     private let library: ReadOnlyLibrary
+    private let packed: PackedThumbnails
+    /// Shared across every extraction: building the Metal pipeline costs more than
+    /// decoding a thumbnail does. Nil when the GPU cannot do BC7, in which case this
+    /// source is simply skipped.
+    private let decoder: ThumbnailDecoder?
 
     public init(bundleURL: URL) throws {
-        self.library = try ReadOnlyLibrary(bundleURL: bundleURL)
+        let library = try ReadOnlyLibrary(bundleURL: bundleURL)
+        self.library = library
+
+        let thumbDir = "resources/derivatives/thumbs"
+        let files: [(name: String, bytes: Int64)] = library.contents(of: thumbDir)
+            .filter { $0.hasSuffix(".ithmb") }
+            .compactMap { name in
+                guard let bytes = library.size(of: "\(thumbDir)/\(name)") else { return nil }
+                return (name, bytes)
+            }
+        self.packed = PackedThumbnails(files: files)
+        self.decoder = packed.files.isEmpty ? nil : try? ThumbnailDecoder()
     }
 
     public var displayName: String { library.displayName }
@@ -52,13 +68,39 @@ public final class PictureExtractor {
     /// usually absent and a cached derivative is the only copy left. Order is:
     /// the original if it was downloaded, else the largest derivative, else nothing.
     ///
-    /// The packed `.ithmb` cache is a fourth possible source and is deliberately not
-    /// read yet: its layout has to be confirmed against a real library before it can be
-    /// decoded without producing garbled images. `thumbnailCacheIsAvailable` reports
-    /// whether that fallback would have anything to offer.
+    /// The third source is the packed `.ithmb` cache. It is small — at most 64 pixels
+    /// on the long side — but it is the only thing that survives for the great majority
+    /// of photos in an iCloud-optimized library, so it is the difference between a grid
+    /// of pictures and a grid of filenames.
     public func extractPicture(for asset: AssetRecord, maxBytes: Int = 64 << 20) -> ExtractedPicture? {
         if let original = readOriginal(asset, limit: maxBytes) { return original }
         if let derivative = readLargestDerivative(asset, limit: maxBytes) { return derivative }
+        if let packedThumb = readPackedThumbnail(asset) { return packedThumb }
+        return nil
+    }
+
+    /// Reads the asset's record out of the packed cache and decodes it.
+    ///
+    /// Each record carries the UUID of the photo it belongs to, and that is checked
+    /// against the asset we were asked about. If the index were ever wrong, this
+    /// returns nothing rather than quietly showing a different person's photo.
+    private func readPackedThumbnail(_ asset: AssetRecord) -> ExtractedPicture? {
+        guard let decoder,
+              let index = asset.placement.thumbnailIndex, index >= 0 else { return nil }
+
+        let dir = "resources/derivatives/thumbs"
+        for file in packed.files where index < file.recordCount {
+            let offset = PackedThumbnails.offset(forIndex: index)
+            guard let bytes = try? library.read(
+                "\(dir)/\(file.fileName)",
+                at: offset,
+                length: PackedThumbnails.recordStride
+            ) else { continue }
+
+            guard let record = PackedThumbnails.parse(record: bytes, expecting: asset.uuid),
+                  let jpeg = decoder.jpeg(from: record) else { continue }
+            return ExtractedPicture(data: jpeg, kind: .thumbnail, fileExtension: "jpg")
+        }
         return nil
     }
 
@@ -74,7 +116,7 @@ public final class PictureExtractor {
 
     /// True when the library has a packed thumbnail cache at all.
     public var thumbnailCacheIsAvailable: Bool {
-        !contentsOfThumbsDirectory().isEmpty
+        !packed.files.isEmpty
     }
 
     /// Sizes of the packed thumbnail files, for the measurement that has to happen

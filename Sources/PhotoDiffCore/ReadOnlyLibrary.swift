@@ -115,6 +115,13 @@ public final class ReadOnlyLibrary {
             return Data(buf[0..<n])
         }
 
+        /// Moves the read position. There is no write counterpart to pair with it.
+        public func seek(to offset: Int64) throws {
+            guard lseek(fd, off_t(offset), SEEK_SET) >= 0 else {
+                throw Failure.unreadable("seek", errno)
+            }
+        }
+
         public func close() {
             if !closed { Darwin.close(fd); closed = true }
         }
@@ -139,6 +146,26 @@ public final class ReadOnlyLibrary {
         var out = Data()
         while out.count < limit {
             let chunk = try h.read(upTo: min(1 << 20, limit - out.count))
+            if chunk.isEmpty { break }
+            out.append(chunk)
+        }
+        return out
+    }
+
+    /// Reads a slice of a file without loading the rest. The packed thumbnail files
+    /// run to tens of megabytes and we want 4KB out of the middle, so reading whole
+    /// files here would be wasteful to the point of being unusable.
+    ///
+    /// Still `O_RDONLY`, still through `open`, so it inherits every guarantee above.
+    public func read(_ relativePath: String, at offset: Int64, length: Int) throws -> Data {
+        let handle = try open(relativePath)
+        defer { handle.close() }
+        try handle.seek(to: offset)
+
+        var out = Data()
+        out.reserveCapacity(length)
+        while out.count < length {
+            let chunk = try handle.read(upTo: length - out.count)
             if chunk.isEmpty { break }
             out.append(chunk)
         }

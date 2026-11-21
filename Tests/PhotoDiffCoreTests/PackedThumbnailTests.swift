@@ -9,7 +9,8 @@ struct PackedThumbnailTests {
 
     /// Builds one synthetic record. No real library data is used.
     static func record(uuid: String, width: Int, height: Int, fill: UInt8) -> Data {
-        var d = Data()
+        // Pixels first, then the UUID and dimensions as a trailer — the real layout.
+        var d = Data(repeating: fill, count: PackedThumbnails.pixelDataLength)
         let hex = uuid.replacingOccurrences(of: "-", with: "")
         for i in stride(from: 0, to: hex.count, by: 2) {
             let s = hex.index(hex.startIndex, offsetBy: i)
@@ -21,19 +22,48 @@ struct PackedThumbnailTests {
                   UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)])
         }
         d.append(u32(width)); d.append(u32(height)); d.append(u32(0))
-        d.append(Data(repeating: fill, count: PackedThumbnails.pixelDataLength))
         return d
     }
 
-    @Test("Record offsets follow a 4096-byte header and a 4124-byte stride")
+    @Test("Records are 4124 bytes apart, starting at zero")
     func offsets() {
-        // These exact numbers were verified against a real library: the assets with
-        // ZTHUMBNAILINDEX 0...6 had their UUIDs at precisely these offsets.
-        #expect(PackedThumbnails.offset(forIndex: 0) == 4096)
-        #expect(PackedThumbnails.offset(forIndex: 1) == 8220)
-        #expect(PackedThumbnails.offset(forIndex: 2) == 12344)
-        #expect(PackedThumbnails.offset(forIndex: 3) == 16468)
-        #expect(PackedThumbnails.offset(forIndex: 6) == 28840)
+        #expect(PackedThumbnails.offset(forIndex: 0) == 0)
+        #expect(PackedThumbnails.offset(forIndex: 1) == 4124)
+        #expect(PackedThumbnails.offset(forIndex: 2) == 8248)
+    }
+
+    /// The layout was confirmed this way against a real library: the UUID of the asset
+    /// with ZTHUMBNAILINDEX = k appeared at k*4124 + 4096, for k = 0...6.
+    @Test("The uuid trailer lands where the real library put it")
+    func uuidTrailerOffsets() {
+        func uuidAt(_ k: Int) -> Int64 {
+            PackedThumbnails.offset(forIndex: k) + Int64(PackedThumbnails.uuidOffset)
+        }
+        #expect(uuidAt(0) == 4096)
+        #expect(uuidAt(1) == 8220)
+        #expect(uuidAt(2) == 12344)
+        #expect(uuidAt(3) == 16468)
+        #expect(uuidAt(6) == 28840)
+    }
+
+    @Test("Pixel length follows the BC7 block grid, not the whole 4096 bytes")
+    func blockMaths() throws {
+        let id = "9451791F-F5D8-437B-82CE-0C40AC1EE156"
+        // 30x64 -> 8x16 blocks -> 2048 bytes. This matched the real file exactly:
+        // record 0 had precisely 2048 non-zero bytes.
+        let r = try #require(PackedThumbnails.parse(
+            record: Self.record(uuid: id, width: 30, height: 64, fill: 9), expecting: id))
+        #expect(r.blocksWide == 8)
+        #expect(r.blocksHigh == 16)
+        #expect(r.blockBytes == 2048)
+        #expect(r.pixelData.count == 2048)
+        #expect(r.paddedWidth == 32)
+        #expect(r.paddedHeight == 64)
+
+        // A full 64x64 uses all 4096 bytes.
+        let full = try #require(PackedThumbnails.parse(
+            record: Self.record(uuid: id, width: 64, height: 64, fill: 9), expecting: id))
+        #expect(full.blockBytes == 4096)
     }
 
     @Test("A record yields its uuid, dimensions and pixel bytes")
@@ -46,7 +76,7 @@ struct PackedThumbnailTests {
         #expect(r.uuid == id)
         #expect(r.width == 30)
         #expect(r.height == 64)
-        #expect(r.pixelData.count == 4096)
+        #expect(r.pixelData.count == r.blockBytes)
         #expect(r.pixelData.allSatisfy { $0 == 7 })
     }
 
@@ -85,12 +115,12 @@ struct PackedThumbnailTests {
         let p = PackedThumbnails(files: [("4133.ithmb", 54_634_752)])
         #expect(p.files.count == 1)
         #expect(p.files[0].formatID == 4133)
-        // (54634752 - 4096) / 4124, and it must cover the 13,224 slots that library needs.
-        #expect(p.files[0].recordCount == 13_247)
+        // 54634752 / 4124, which must cover the 13,224 slots that library needs.
+        #expect(p.files[0].recordCount == 13_248)
         #expect(p.files[0].recordCount >= 13_224)
     }
 
-    @Test("A file too small to hold even a header is ignored")
+    @Test("A file too small to hold even one record is ignored")
     func tinyFileIgnored() {
         #expect(PackedThumbnails(files: [("4133.ithmb", 64)]).files.isEmpty)
     }
