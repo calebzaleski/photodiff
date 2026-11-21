@@ -1,99 +1,130 @@
 import Foundation
 
-/// Reads Photos' packed thumbnail cache — the `.ithmb` files under
-/// `resources/derivatives/thumbs/`.
+/// Reads the container format of Photos' packed thumbnail cache — the `.ithmb` files
+/// under `resources/derivatives/thumbs/`.
 ///
-/// This matters more than it sounds. Libraries that ran with iCloud "Optimize Mac
-/// Storage" keep almost no full-size originals on disk, and only a minority of assets
-/// have a per-asset derivative JPEG. But Photos keeps a small thumbnail for very nearly
-/// every asset here — in one real library, 13,081 of 13,087 photos. Without this, most
-/// of a result is filename tiles; with it, nearly all of it is pictures.
+/// ## Why this matters
 ///
-/// ## The format
+/// A library that ran with iCloud "Optimize Mac Storage" keeps almost nothing on disk.
+/// In one real library of 13,087 photos there were 530 full originals and 1,064 cached
+/// previews; the remaining ~11,500 exist locally *only* as an entry in here. When those
+/// photos are also gone from iCloud, this file is the last copy that exists anywhere.
 ///
-/// Each `.ithmb` is a flat array of fixed-size records with no header. An asset's
-/// record sits at `ZTHUMBNAILINDEX * stride`. Unused slots are zero-filled, and the
-/// file is preallocated, so its length is an upper bound on the slot count rather than
-/// an exact multiple — the stride cannot be recovered by dividing.
+/// ## The container, confirmed
 ///
-/// The records are raw **ASTC 4×4 LDR** blocks: 16 bytes per 4×4 pixel block, so
-/// exactly 1 byte per pixel. A 4,096-byte record is therefore 64×64. That is a GPU
-/// texture format, which is why the bytes are neither JPEG nor plain pixels.
+/// Worked out by reading a real library and checked against its database: the UUIDs
+/// recorded here match the assets whose `ZTHUMBNAILINDEX` is 0...6, at exactly the
+/// offsets this layout predicts.
 ///
-/// The file name is Photos' own format id (4532, 4133, 3356...), not a size, so the
-/// stride is derived from the file rather than assumed.
+/// ```text
+///   offset 0       4096-byte header (purpose unknown, not needed)
+///   offset 4096    record 0
+///   offset 4096 + index * 4124    record for ZTHUMBNAILINDEX = index
+///
+///   each record, 4124 bytes:
+///     0..15     asset UUID, raw 16 bytes      <- lets a record be verified, not trusted
+///     16..19    width  in pixels, uint32 LE   <- e.g. 30, 48, 64
+///     20..23    height in pixels, uint32 LE   <- e.g. 64, 48, 19
+///     24..27    zero in every record observed
+///     28..4123  4096 bytes of pixel data for a 64x64 grid, cropped to width x height
+/// ```
+///
+/// A record whose UUID is all zero is an empty slot.
+///
+/// ## What is still unknown
+///
+/// The pixel encoding. 4096 bytes for a 64×64 grid is exactly one byte per pixel, and
+/// the data has a clear 16-byte block structure — both of which point at a
+/// block-compressed GPU texture. But decoding it as ASTC (every block footprint),
+/// BC3, BC7 and ETC2/EAC, uploaded both with `replace` and with a buffer blit, in
+/// linear and in Morton order, all produce the same wrong result: plausible detail in
+/// the first few blocks and a flat field after.
+///
+/// So `pixelData(for:)` hands back the bytes and makes no claim about them. Nothing in
+/// the app turns them into an image yet, and photos with no other source still show a
+/// metadata tile. A missing picture is a fair answer; a garbled one would not be.
 public struct PackedThumbnails: Sendable {
 
-    public struct Format: Sendable {
-        /// Photos' format id, which is also the file's name.
-        public let id: Int
-        public let stride: Int
-        public let side: Int
-        public let slots: Int
-        public let fileName: String
+    public static let headerLength = 4096
+    public static let recordStride = 4124
+    public static let uuidLength = 16
+    public static let pixelDataOffset = 28
+    public static let pixelDataLength = 4096
+    /// The pixel data always covers a 64×64 grid; `width`/`height` crop it.
+    public static let gridSide = 64
+
+    public struct Record: Sendable {
+        /// Uppercased, hyphenated, as the database writes it.
+        public let uuid: String
+        public let width: Int
+        public let height: Int
+        /// The undecoded pixel bytes. See the note above before trying to draw these.
+        public let pixelData: Data
     }
 
-    /// ASTC 4×4 is one byte per pixel, so a square record of `n` bytes is √n on a side.
-    /// Only sizes Photos actually uses are accepted, so a file we do not understand is
-    /// skipped rather than decoded into noise.
-    static let plausibleSides = [32, 64, 128, 160, 256, 320, 512]
+    public struct File: Sendable {
+        /// Photos' own format id, which is also the file's name, e.g. 4133.
+        public let formatID: Int
+        public let fileName: String
+        public let recordCount: Int
+    }
 
-    /// Records always begin on a 4KB boundary in the files observed.
-    static let alignment = 4096
+    public let files: [File]
 
-    public let formats: [Format]
-
-    /// Works out each file's record size from its length and the number of assets that
-    /// claim a slot in it. Prefers the largest thumbnail available.
-    public init(files: [(name: String, bytes: Int64)], highestIndex: Int) {
-        let slotsNeeded = max(1, highestIndex + 1)
-
-        formats = files.compactMap { file -> Format? in
-            let id = Int((file.name as NSString).deletingPathExtension) ?? 0
-            guard file.bytes > 0 else { return nil }
-
-            // The stride has to be 4KB-aligned and give a square ASTC image at one
-            // byte per pixel, and the resulting slot count has to land just above the
-            // number of assets — not far above it.
-            //
-            // That second condition is what keeps this honest. A too-small stride
-            // always "fits", it just carves the file into far more slots than there
-            // are photos and reads each one from the wrong offset, producing noise.
-            // Requiring the count to be within 50% of the asset count rejects that.
-            // A file whose layout we cannot pin down this way is skipped, and the
-            // caller falls back to a metadata tile — a missing picture is a fair
-            // answer, a garbled one is not.
-            let candidates = Self.plausibleSides
-                .map { (side: $0, stride: $0 * $0) }
-                .filter { $0.stride % Self.alignment == 0 }
-                .map { (side: $0.side, stride: $0.stride, slots: Int(file.bytes / Int64($0.stride))) }
-                .filter { $0.slots >= slotsNeeded }
-                .filter { Double($0.slots) < Double(slotsNeeded) * 1.5 }
-                .sorted { $0.stride > $1.stride }   // biggest that still qualifies
-
-            guard let best = candidates.first else { return nil }
-            return Format(
-                id: id,
-                stride: best.stride,
-                side: best.side,
-                slots: best.slots,
-                fileName: file.name
+    public init(files: [(name: String, bytes: Int64)]) {
+        self.files = files.compactMap { file in
+            guard file.bytes > Int64(Self.headerLength) else { return nil }
+            let usable = file.bytes - Int64(Self.headerLength)
+            return File(
+                formatID: Int((file.name as NSString).deletingPathExtension) ?? 0,
+                fileName: file.name,
+                recordCount: Int(usable / Int64(Self.recordStride))
             )
         }
-        .sorted { $0.side > $1.side }   // best quality first
+        .sorted { $0.recordCount > $1.recordCount }
     }
 
-    /// Where an asset's thumbnail lives, best format first.
-    public func locations(forIndex index: Int) -> [(format: Format, offset: Int64)] {
-        guard index >= 0 else { return [] }
-        return formats.compactMap { format in
-            guard index < format.slots else { return nil }
-            return (format, Int64(index) * Int64(format.stride))
+    public static func offset(forIndex index: Int) -> Int64 {
+        Int64(headerLength) + Int64(index) * Int64(recordStride)
+    }
+
+    /// Parses one record's bytes. Returns nil for an empty slot, and — importantly —
+    /// for a record whose UUID is not the asset we asked about. The UUID in the record
+    /// means a wrong offset is caught rather than silently shown as someone else's
+    /// photo.
+    public static func parse(record bytes: Data, expecting uuid: String?) -> Record? {
+        guard bytes.count >= recordStride else { return nil }
+        let raw = bytes.prefix(uuidLength)
+        guard raw.contains(where: { $0 != 0 }) else { return nil }
+
+        let found = formatUUID(Array(raw))
+        if let uuid, found.caseInsensitiveCompare(uuid) != .orderedSame { return nil }
+
+        func u32(_ at: Int) -> Int {
+            let b = Array(bytes[bytes.startIndex + at ..< bytes.startIndex + at + 4])
+            return Int(b[0]) | Int(b[1]) << 8 | Int(b[2]) << 16 | Int(b[3]) << 24
         }
+        let width = u32(16), height = u32(20)
+        guard width > 0, height > 0, width <= gridSide, height <= gridSide else {
+            return nil
+        }
+
+        let start = bytes.startIndex + pixelDataOffset
+        return Record(
+            uuid: found,
+            width: width,
+            height: height,
+            pixelData: bytes[start ..< start + pixelDataLength]
+        )
     }
 
-    /// A record of all zero bytes is an empty slot, not a black picture.
-    public static func isEmptySlot(_ data: Data) -> Bool {
-        !data.contains { $0 != 0 }
+    static func formatUUID(_ b: [UInt8]) -> String {
+        let hex = b.map { String(format: "%02X", $0) }.joined()
+        let parts = [hex.prefix(8),
+                     hex.dropFirst(8).prefix(4),
+                     hex.dropFirst(12).prefix(4),
+                     hex.dropFirst(16).prefix(4),
+                     hex.dropFirst(20).prefix(12)]
+        return parts.joined(separator: "-")
     }
 }
