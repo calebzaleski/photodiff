@@ -97,6 +97,8 @@ final class ScanCoordinator {
     var currentLibraryCount = 0
     var currentPhotoCount = 0
     var currentVideoCount = 0
+    var currentHiddenCount = 0
+    var currentBurstExtraCount = 0
     var timings: [String: TimeInterval] = [:]
     var pictureStoreBytes: Int64 = 0
 
@@ -191,6 +193,8 @@ final class ScanCoordinator {
         currentLibraryCount = built.assetCount
         currentPhotoCount = built.photoCount
         currentVideoCount = built.videoCount
+        currentHiddenCount = built.hiddenCount
+        currentBurstExtraCount = built.nonRepresentativeBurstCount
         timings["Current library"] = built.buildTime
 
         // 2. Every old library, concurrently.

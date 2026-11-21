@@ -31,6 +31,13 @@ final class CurrentLibraryIndex {
         var photoCount: Int
         var videoCount: Int
         var withoutDate: Int
+        /// Hidden photos, and burst frames other than the one Photos picks as the
+        /// keeper. Photos leaves both out of the count it shows you, but they are
+        /// genuinely in the library — so they are counted here, and an old copy of
+        /// one must not be reported as missing. This is why the app's photo count
+        /// runs slightly above the number in Photos.
+        var hiddenCount: Int
+        var nonRepresentativeBurstCount: Int
         var buildTime: TimeInterval
     }
 
@@ -78,6 +85,8 @@ final class CurrentLibraryIndex {
         var withoutDate = 0
         var photos = 0
         var videos = 0
+        var hidden = 0
+        var burstExtras = 0
         let total = fetched.count
 
         fetched.enumerateObjects { asset, offset, _ in
@@ -85,6 +94,10 @@ final class CurrentLibraryIndex {
 
             let isVideo = asset.mediaType == .video
             if isVideo { videos += 1 } else { photos += 1 }
+            if asset.isHidden { hidden += 1 }
+            if asset.representsBurst == false && asset.burstIdentifier != nil {
+                burstExtras += 1
+            }
             let duration = isVideo ? asset.duration : nil
             index.insert(
                 captureDate: asset.creationDate,
@@ -115,6 +128,8 @@ final class CurrentLibraryIndex {
             photoCount: photos,
             videoCount: videos,
             withoutDate: withoutDate,
+            hiddenCount: hidden,
+            nonRepresentativeBurstCount: burstExtras,
             buildTime: Date().timeIntervalSince(started)
         )
     }

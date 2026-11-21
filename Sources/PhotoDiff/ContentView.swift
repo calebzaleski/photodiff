@@ -133,7 +133,23 @@ private struct LibrarySidebar: View {
                     LabeledContent("Total") {
                         Text("\(coordinator.currentLibraryCount)").monospacedDigit().bold()
                     }
-                    Text("Compare these with what Photos shows at the bottom of its Library view.")
+                    if coordinator.currentHiddenCount > 0 {
+                        LabeledContent("of which hidden") {
+                            Text("\(coordinator.currentHiddenCount)").monospacedDigit()
+                        }
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                    if coordinator.currentBurstExtraCount > 0 {
+                        LabeledContent("of which burst frames") {
+                            Text("\(coordinator.currentBurstExtraCount)").monospacedDigit()
+                        }
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                    Text("""
+                        Photos leaves hidden photos and extra burst frames out of the                         count it shows. They are still in your library, so they are                         counted here — subtract them to compare.
+                        """)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
