@@ -64,3 +64,42 @@ public final class TempStore {
 
     deinit { discard() }
 }
+
+/// Writes a byte stream to a chosen file. Like `TempStore`, it is deliberately unable
+/// to name a Photos library — it takes only a `ByteSource` — so no edit here can reach
+/// one. Streaming matters: the originals include videos well over a gigabyte, and
+/// reading those into memory first is not an option.
+public enum StreamCopier {
+
+    public enum Failure: Error, LocalizedError {
+        case cannotCreate(String)
+        public var errorDescription: String? {
+            switch self {
+            case .cannotCreate(let p): return "Could not create \(p)"
+            }
+        }
+    }
+
+    /// Copies `source` to `target`, 4MB at a time. Returns the bytes written.
+    @discardableResult
+    public static func copy(_ source: ByteSource, to target: URL) throws -> Int64 {
+        defer { source.close() }
+        let fm = FileManager.default
+        try fm.createDirectory(at: target.deletingLastPathComponent(),
+                               withIntermediateDirectories: true)
+        guard fm.createFile(atPath: target.path, contents: nil) else {
+            throw Failure.cannotCreate(target.path)
+        }
+        let out = try FileHandle(forWritingTo: target)
+        defer { try? out.close() }
+
+        var written: Int64 = 0
+        while true {
+            let chunk = try source.read(upTo: 4 << 20)
+            if chunk.isEmpty { break }
+            try out.write(contentsOf: chunk)
+            written += Int64(chunk.count)
+        }
+        return written
+    }
+}

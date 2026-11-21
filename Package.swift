@@ -22,6 +22,13 @@ let package = Package(
                 .linkedFramework("SwiftUI"),
             ]
         ),
+        // Bulk recovery: pull every full-quality photo out of a folder of libraries.
+        // Separate from the app because it needs no Photos permission and no window.
+        .executableTarget(
+            name: "photodiff-extract",
+            dependencies: ["PhotoDiffCore"],
+            path: "Sources/Extract"
+        ),
         .testTarget(
             name: "PhotoDiffCoreTests",
             dependencies: ["PhotoDiffCore"],
